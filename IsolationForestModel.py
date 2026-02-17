@@ -1,12 +1,13 @@
- 
 """
 Interactive Isolation Forest for NEO Anomaly Detection
 Shows graph with matplotlib - hover to see NEO details
+NOW SAVES MODEL TO JOBLIB FILE
 """
 
 import sqlite3
 import pandas as pd
 import matplotlib.pyplot as plt
+import joblib
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
@@ -69,6 +70,22 @@ def train_isolation_forest(df, contamination=0.1):
     df['anomaly_prediction'] = predictions
     df['anomaly_score'] = anomaly_scores
     df['is_anomaly'] = (predictions == -1).astype(int)
+    
+    # ========== SAVE THE MODEL ==========
+    print("\n" + "="*60)
+    print("SAVING TRAINED MODELS...")
+    print("="*60)
+    
+    # Save Isolation Forest model
+    joblib.dump(iso_forest, 'neo_isolation_forest_model.joblib')
+    print("✓ Isolation Forest model saved to: neo_isolation_forest_model.joblib")
+    
+    # Save the scaler
+    joblib.dump(scaler, 'neo_isolation_forest_scaler.joblib')
+    print("✓ Scaler saved to: neo_isolation_forest_scaler.joblib")
+    
+    print("="*60 + "\n")
+    # ====================================
     
     return df, iso_forest, scaler, X_scaled
 
@@ -184,13 +201,24 @@ def create_interactive_plot(df, X_scaled):
 def main():
     """Main execution - load data, train model, show graph"""
     
+    print("="*60)
+    print("NEO ISOLATION FOREST - Training and Saving Model")
+    print("="*60 + "\n")
+    
     # Load data
+    print("Loading NEO data from database...")
     df = load_neo_data()
+    print(f"✓ Loaded {len(df):,} NEO records\n")
     
     # Train model
+    print("Training Isolation Forest model...")
     df, model, scaler, X_scaled = train_isolation_forest(df, contamination=0.02)
+    print(f"✓ Model training complete")
+    print(f"  - Found {(df['is_anomaly'] == 1).sum():,} anomalies ({(df['is_anomaly'] == 1).sum() / len(df) * 100:.1f}%)\n")
     
     # Create and show interactive plot
+    print("Creating interactive visualization...")
+    print("(Hover over points to see NEO details)\n")
     create_interactive_plot(df, X_scaled)
 
 if __name__ == "__main__":
