@@ -191,41 +191,6 @@ class NEOPredictor:
                         f"Error parsing NEO {neo.get('name', 'Unknown')}: {exc}"
                     )
                     continue
-<<<<<<< HEAD:realtime_neo_updater.py
-
-        df = pd.DataFrame.from_records(records)
-=======
-        
-        return pd.DataFrame(records)
-    
-    def predict(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Generate predictions"""
-        if df.empty:
-            return df
-        
-        # Simple risk calculation if models not available
-        if self.xgboost_model is None and self.isolation_forest is None:
-            # Fallback: rule-based risk
-            df["risk_score"] = (
-                (df["diameter_m"] > 140) * 0.4 +
-                (df["velocity_kms"] > 15) * 0.3 +
-                (df["miss_distance_km"] < 7480000) * 0.3
-            )
-            df["risk_label"] = pd.cut(
-                df["risk_score"],
-                bins=[0, 0.3, 0.7, 1.0],
-                labels=["LOW", "MEDIUM", "HIGH"]
-            )
-        else:
-            # Use actual models (simplified - adjust based on your model requirements)
-            df["risk_score"] = df["hazardous"].astype(float)  # Placeholder
-            df["risk_label"] = df["hazardous"].map({0: "LOW", 1: "HIGH"})
-        
-        # Fixed datetime - use timezone-aware
-        df["prediction_time_utc"] = datetime.now(timezone.utc).isoformat()
-        
->>>>>>> 049ddf2cdfbc031676f34dd48de3985a31d27dc4:realtime_neo_updater_back.py
-        return df
 
     def predict(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add risk_score and risk_label columns to the DataFrame."""
