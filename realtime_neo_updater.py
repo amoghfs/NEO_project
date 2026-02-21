@@ -183,7 +183,8 @@ class NEOPredictor:
             df["risk_label"] = df["hazardous"].map({0: "LOW", 1: "HIGH"})
         
         # Fixed datetime - use timezone-aware
-        df["prediction_time_utc"] = datetime.now(datetime.timezone.utc).isoformat()
+        #df["prediction_time_utc"] = datetime.now(datetime.timezone.utc).isoformat()
+        df["prediction_time_utc"] = datetime.now(timezone.utc).isoformat()
         
         return df
 
