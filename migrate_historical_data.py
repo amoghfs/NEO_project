@@ -1,336 +1,392 @@
-"""
-Historical Data Migration Script
-Imports your existing 1975-2025 NEO data into the new database format
-"""
 
-import sqlite3
-import pandas as pd
-import numpy as np
-import joblib
-from datetime import datetime
-import sys
+#C:\Users\agurl\OneDrive\Desktop\Amogh_Stuff\Synopsys_2025\Github_Folder\NEO_project\neo1.db
+
 import os
+import sys
+import sqlite3
+from datetime import datetime, timezone
 
+import joblib
+import numpy as np
+import pandas as pd
+
+
+# ----------------------------
 # Configuration
-OLD_DB_PATH = "neo.db"  # Your existing database (change if different)
-NEW_DB_PATH = "neo.db"  # New database with predictions
-PRED_TABLE = "near_earth_objects"
+# ----------------------------
+NEW_DB_PATH = "neo.db"
+PRED_TABLE = "neo_predictions"
 
-# Model paths
-XGBOOST_MODEL_PATH = "neo_hazard_model_xgb_iso.joblin"
+XGBOOST_MODEL_PATH = "neo_hazard_model_xgb_iso.joblib"
 ISOLATION_FOREST_MODEL_PATH = "neo_isolation_forest_model.joblib"
-SCALER_PATH = "scaler.pkl"
+SCALER_PATH = "neo_isolation_forest_scaler.joblib"
 
 
-def load_historical_data(source_path):
-    """
-    Load historical data from various sources
-    Supports: SQLite DB, CSV, or other formats
-    """
-    print(f"Loading historical data from {source_path}...")
-    
-    # Determine file type and load accordingly
-    if source_path.endswith('.db'):
-        # SQLite database
+# ----------------------------
+# Helpers
+# ----------------------------
+
+def log1p_array(X):
+    # X is a numpy array from the imputer
+    return np.log1p(X)
+def _clean_path(s: str) -> str:
+    s = (s or "").strip().strip('"').strip("'")
+    s = os.path.expanduser(s)
+    return os.path.normpath(s)
+
+
+def load_historical_data(source_path: str) -> pd.DataFrame | None:
+    print(f"Loading historical data from: {source_path}")
+
+    if source_path.lower().endswith(".db"):
         with sqlite3.connect(source_path) as conn:
-            # You may need to adjust table name and columns based on your schema
-            # Common table names: 'neo_data', 'asteroids', 'near_earth_objects'
-            
-            # Try to detect the table
-            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            tables = [row[0] for row in cursor.fetchall()]
+            cursor = conn.execute("""
+                SELECT name FROM sqlite_master
+                WHERE type='table' AND name NOT LIKE 'sqlite_%'
+                ORDER BY name
+            """)
+            tables = [r[0] for r in cursor.fetchall()]
+            if not tables:
+                print("❌ No user tables found in source DB.")
+                return None
+
             print(f"Found tables: {tables}")
-            
-            # Use the first non-system table or prompt user
             if len(tables) == 1:
                 table_name = tables[0]
             else:
-                print("Multiple tables found. Which one contains NEO data?")
-                for i, table in enumerate(tables):
-                    print(f"{i+1}. {table}")
-                choice = int(input("Enter number: ")) - 1
+                print("Multiple tables found. Choose the NEO table:")
+                for i, t in enumerate(tables):
+                    print(f"{i+1}. {t}")
+                choice = int(input("Enter number: ").strip()) - 1
+                if choice < 0 or choice >= len(tables):
+                    print("❌ Invalid selection.")
+                    return None
                 table_name = tables[choice]
-            
+
             df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
-    
-    elif source_path.endswith('.csv'):
-        # CSV file
+
+    elif source_path.lower().endswith(".csv"):
         df = pd.read_csv(source_path)
-    
-    elif source_path.endswith('.parquet'):
-        # Parquet file
+
+    elif source_path.lower().endswith(".parquet"):
         df = pd.read_parquet(source_path)
-    
+
     else:
-        print(f"Unsupported file type: {source_path}")
+        print("❌ Unsupported file type.")
         return None
-    
+
     print(f"Loaded {len(df):,} records")
     return df
 
 
-def standardize_columns(df):
+def standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Standardize column names to match the new schema
-    Adjust this function based on your existing column names
+    Standardize to the logical names we will use for modeling.
+    We keep magnitude as absolute_magnitude_h to match your DB schema.
     """
-    print("Standardizing column names...")
-    
-    # Common column name mappings
-    # Adjust these based on your actual column names
     column_mapping = {
-        # Date columns
-        'close_approach_date': 'date',
-        'approach_date': 'date',
-        
-        # Identification
-        'designation': 'name',
-        'neo_id': 'neo_reference_id',
-        'reference_id': 'neo_reference_id',
-        
-        # Physical characteristics
-        'estimated_diameter_m': 'diameter_m',
-        'diameter': 'diameter_m',
-        'est_diameter_meters': 'diameter_m',
-        
-        # Orbital parameters
-        'miss_distance': 'miss_distance_km',
-        'relative_velocity': 'velocity_kmh',
-        'velocity': 'velocity_kmh',
-        
-        # Classification
-        'is_hazardous': 'hazardous',
-        'potentially_hazardous': 'hazardous',
-        'is_potentially_hazardous_asteroid': 'hazardous',
-        
+        # Date
+        "close_approach_date": "date",
+        "approach_date": "date",
+
+        # ID/name
+        "designation": "name",
+        "neo_id": "neo_reference_id",
+        "reference_id": "neo_reference_id",
+
+        # Physical
+        "estimated_diameter_m": "diameter_m",
+        "diameter": "diameter_m",
+        "est_diameter_meters": "diameter_m",
+
+        # Orbital
+        "miss_distance": "miss_distance_km",
+        "relative_velocity": "velocity_kmh",
+        "velocity": "velocity_kmh",
+
+        # Hazard
+        "is_hazardous": "hazardous",
+        "potentially_hazardous": "hazardous",
+        "is_potentially_hazardous_asteroid": "hazardous",
+
         # Magnitude
-        'absolute_magnitude_h': 'absolute_magnitude',
-        'h_mag': 'absolute_magnitude',
+        "absolute_magnitude": "absolute_magnitude_h",
+        "h_mag": "absolute_magnitude_h",
+        "absolute_magnitude_h": "absolute_magnitude_h",
     }
-    
-    # Rename columns
     df = df.rename(columns=column_mapping)
-    
-    # Handle diameter averaging if min/max are present
-    if 'diameter_min' in df.columns and 'diameter_max' in df.columns:
-        df['diameter_m'] = (df['diameter_min'] + df['diameter_max']) / 2
-    
-    # Ensure hazardous is 0/1
-    if 'hazardous' in df.columns:
-        df['hazardous'] = df['hazardous'].astype(int)
-    
-    # Add orbiting_body if missing (assume Earth)
-    if 'orbiting_body' not in df.columns:
-        df['orbiting_body'] = 'Earth'
-    
-    print(f"Columns after standardization: {df.columns.tolist()}")
+
+    # Derive diameter_m if min/max exist and diameter_m missing
+    if "diameter_m" not in df.columns and "diameter_min" in df.columns and "diameter_max" in df.columns:
+        df["diameter_m"] = (
+            pd.to_numeric(df["diameter_min"], errors="coerce") +
+            pd.to_numeric(df["diameter_max"], errors="coerce")
+        ) / 2.0
+
+    if "orbiting_body" not in df.columns:
+        df["orbiting_body"] = "Earth"
+
+    # ensure required modeling cols exist
+    for c in ["diameter_m", "miss_distance_km", "velocity_kmh", "absolute_magnitude_h", "hazardous"]:
+        if c not in df.columns:
+            df[c] = 0
+
+    df["hazardous"] = pd.to_numeric(df["hazardous"], errors="coerce").fillna(0).astype(int)
+
+    # Clean numeric
+    for c in ["diameter_m", "miss_distance_km", "velocity_kmh", "absolute_magnitude_h"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
     return df
 
 
-def add_predictions(df):
+def _get_table_columns(conn: sqlite3.Connection, table: str) -> list[str]:
+    cur = conn.execute(f"PRAGMA table_info({table})")
+    return [r[1] for r in cur.fetchall()]
+
+
+def _find_prediction_time_column(table_cols: list[str]) -> str | None:
     """
-    Add predictions from both models to historical data
+    Your UI truncates the name; try common possibilities.
     """
-    print("Loading models and generating predictions...")
-    
-    # Load models
-    try:
-        xgb_model = joblib.load(XGBOOST_MODEL_PATH) if os.path.exists(XGBOOST_MODEL_PATH) else None
-        iso_model = joblib.load(ISOLATION_FOREST_MODEL_PATH) if os.path.exists(ISOLATION_FOREST_MODEL_PATH) else None
-        scaler = joblib.load(SCALER_PATH) if os.path.exists(SCALER_PATH) else None
-    except Exception as e:
-        print(f"Error loading models: {e}")
-        return df
-    
-    # Feature engineering
-    df['log_diameter'] = np.log1p(df['diameter_m'])
-    df['log_miss_distance'] = np.log1p(df['miss_distance_km'])
-    df['velocity_kms'] = df['velocity_kmh'] / 3600
-    df['size_velocity_ratio'] = df['diameter_m'] / (df['velocity_kms'] + 1)
-    df['proximity_index'] = df['diameter_m'] / (df['miss_distance_km'] + 1)
-    
-    # Define features
-    feature_cols = [
-        'diameter_m', 'miss_distance_km', 'velocity_kmh',
-        'absolute_magnitude', 'log_diameter', 'log_miss_distance',
-        'velocity_kms', 'size_velocity_ratio', 'proximity_index'
+    candidates = [
+        "prediction_time_utc",
+        "prediction_time",
+        "prediction_time_utc_text",
+        "prediction_time_timestamp",
     ]
-    
-    # Fill missing features
-    for col in feature_cols:
-        if col not in df.columns:
-            df[col] = 0
-    
-    X = df[feature_cols].fillna(0)
-    
-    # Scale features
-    if scaler is not None:
-        X_scaled = scaler.transform(X)
-    else:
-        X_scaled = X.values
-    
-    # XGBoost predictions
+    for c in candidates:
+        if c in table_cols:
+            return c
+
+    # fallback: any column starting with prediction_time
+    for c in table_cols:
+        if c.lower().startswith("prediction_time"):
+            return c
+
+    return None
+
+
+def add_predictions(df: pd.DataFrame) -> pd.DataFrame:
+    print("Loading models and generating predictions...")
+
+    import warnings
+    warnings.filterwarnings("ignore", category=UserWarning)
+
+    xgb_model = joblib.load(XGBOOST_MODEL_PATH) if os.path.exists(XGBOOST_MODEL_PATH) else None
+    iso_model = joblib.load(ISOLATION_FOREST_MODEL_PATH) if os.path.exists(ISOLATION_FOREST_MODEL_PATH) else None
+    scaler = joblib.load(SCALER_PATH) if os.path.exists(SCALER_PATH) else None
+
+    # Base 4 features
+    base_features = ["diameter_m", "miss_distance_km", "velocity_kmh", "absolute_magnitude_h"]
+    X4 = df[base_features].fillna(0).to_numpy()
+
+    # Scale for isolation forest (if scaler exists)
+    try:
+        X4_scaled = scaler.transform(X4) if scaler is not None else X4
+    except Exception as e:
+        print(f"⚠️ Scaler failed, using unscaled features: {e}")
+        X4_scaled = X4
+
+    # ---------------- XGBoost ----------------
+    df["xgb_risk_prob"] = 0.0
     if xgb_model is not None:
         print("Running XGBoost predictions...")
-        df['xgb_risk_prob'] = xgb_model.predict_proba(X_scaled)[:, 1]
+        try:
+            # Determine expected feature count for first step in pipeline if possible
+            expected = None
+            if hasattr(xgb_model, "n_features_in_"):
+                expected = int(xgb_model.n_features_in_)
+
+            # Many people save a Pipeline(Imputer+Transformer+Model); the first step may define n_features_in_
+            if expected is None and hasattr(xgb_model, "steps"):
+                for _, step in xgb_model.steps:
+                    if hasattr(step, "n_features_in_"):
+                        expected = int(step.n_features_in_)
+                        break
+
+            # If it expects 5, pad with hazardous as the 5th feature.
+            if expected == 5:
+                X5 = np.column_stack([X4, df["hazardous"].fillna(0).to_numpy()])
+                df["xgb_risk_prob"] = xgb_model.predict_proba(X5)[:, 1]
+            else:
+                # Default try 4
+                df["xgb_risk_prob"] = xgb_model.predict_proba(X4)[:, 1]
+        except Exception as e:
+            print(f"⚠️ XGBoost predict_proba failed: {e}")
+            df["xgb_risk_prob"] = 0.0
     else:
-        print("XGBoost model not found, skipping...")
-        df['xgb_risk_prob'] = 0.0
-    
-    # Isolation Forest predictions
+        print("⚠️ XGBoost model not found, using zeros.")
+
+    # ---------------- Isolation Forest ----------------
+    df["anomaly_score"] = 0.0
+    df["iso_anomaly"] = 0
+    df["anomaly_label"] = 0
+
     if iso_model is not None:
         print("Running Isolation Forest predictions...")
-        anomaly_scores = iso_model.score_samples(X_scaled)
-        
-        # Normalize to 0-1 (higher = more anomalous)
-        min_score = anomaly_scores.min()
-        max_score = anomaly_scores.max()
-        if max_score - min_score > 0:
-            df['isolation_anomaly_score'] = 1 - (anomaly_scores - min_score) / (max_score - min_score)
-        else:
-            df['isolation_anomaly_score'] = 0.0
-        
-        df['is_anomaly'] = (iso_model.predict(X_scaled) == -1).astype(int)
+        try:
+            scores = iso_model.score_samples(X4_scaled)
+            mn, mx = float(np.min(scores)), float(np.max(scores))
+            if mx - mn > 0:
+                # 0..1 where higher => more anomalous
+                df["anomaly_score"] = 1 - (scores - mn) / (mx - mn)
+            else:
+                df["anomaly_score"] = 0.0
+
+            preds = (iso_model.predict(X4_scaled) == -1).astype(int)
+            df["iso_anomaly"] = preds
+            df["anomaly_label"] = preds
+        except Exception as e:
+            print(f"⚠️ Isolation Forest error: {e}")
     else:
-        print("Isolation Forest model not found, skipping...")
-        df['isolation_anomaly_score'] = 0.0
-        df['is_anomaly'] = 0
-    
-    # Combined risk score
-    df['risk_score'] = (
-        0.6 * df['xgb_risk_prob'] +
-        0.4 * df['isolation_anomaly_score']
-    )
-    
-    # Risk labels
-    df['risk_label'] = pd.cut(
-        df['risk_score'],
-        bins=[0, 0.3, 0.7, 1.0],
-        labels=['LOW', 'MEDIUM', 'HIGH']
-    )
-    
-    df['prediction_time_utc'] = datetime.utcnow().isoformat()
-    
-    print("Predictions completed!")
+        print("⚠️ Isolation Forest model not found, using zeros.")
+
+    # Combined risk (match your table: risk_score, risk_label)
+    df["risk_score"] = (0.6 * df["xgb_risk_prob"] + 0.4 * df["anomaly_score"]).astype(float)
+    df["risk_label"] = pd.cut(
+        df["risk_score"],
+        bins=[-0.000001, 0.3, 0.7, 1.000001],
+        labels=["LOW", "MEDIUM", "HIGH"],
+    ).astype(str)
+
+    # timezone-aware utc timestamp to avoid DeprecationWarning
+    df["prediction_time_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    print("Predictions completed.")
     return df
 
 
-def save_to_database(df):
+def save_to_database(df: pd.DataFrame) -> None:
     """
-    Save processed data to the new database
+    UPSERT into existing neo_predictions schema.
+
+    - Auto-detects actual table columns and only writes those.
+    - Creates UNIQUE index on (neo_reference_id, date) so ON CONFLICT works reliably.
     """
-    print("Saving to database...")
-    
-    # Select columns to save
-    save_cols = [
-        'date', 'name', 'neo_reference_id', 'orbiting_body',
-        'diameter_m', 'miss_distance_km', 'velocity_kmh',
-        'hazardous', 'absolute_magnitude', 'xgb_risk_prob',
-        'isolation_anomaly_score', 'is_anomaly', 'risk_score',
-        'risk_label', 'prediction_time_utc'
-    ]
-    
-    # Filter to only columns that exist
-    existing_cols = [col for col in save_cols if col in df.columns]
-    df_save = df[existing_cols].copy()
-    
-    # Save to database
+    print("Saving to database with UPSERT...")
+
     with sqlite3.connect(NEW_DB_PATH) as conn:
-        # Create table if it doesn't exist
+        table_cols = _get_table_columns(conn, PRED_TABLE)
+        if not table_cols:
+            raise RuntimeError(f"Table {PRED_TABLE} not found in {NEW_DB_PATH}. Create it first.")
+
+        pred_time_col = _find_prediction_time_column(table_cols)
+
+        # Create a unique index for upsert key (neo_reference_id, date)
+        # This will fail only if you have duplicates already; if so, we need to clean them once.
         conn.execute(f"""
-            CREATE TABLE IF NOT EXISTS {PRED_TABLE} (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                date TEXT,
-                name TEXT,
-                neo_reference_id TEXT UNIQUE,
-                orbiting_body TEXT,
-                diameter_m REAL,
-                miss_distance_km REAL,
-                velocity_kmh REAL,
-                hazardous INTEGER,
-                absolute_magnitude REAL,
-                xgb_risk_prob REAL,
-                isolation_anomaly_score REAL,
-                is_anomaly INTEGER,
-                risk_score REAL,
-                risk_label TEXT,
-                prediction_time_utc TEXT
-            )
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_{PRED_TABLE}_ref_date
+            ON {PRED_TABLE}(neo_reference_id, date)
         """)
-        
-        # Insert data, replacing duplicates
-        df_save.to_sql(PRED_TABLE, conn, if_exists='append', index=False)
-        
-        # Remove duplicates
-        conn.execute(f"""
-            DELETE FROM {PRED_TABLE}
-            WHERE id NOT IN (
-                SELECT MAX(id)
-                FROM {PRED_TABLE}
-                GROUP BY neo_reference_id
-            )
-        """)
-        
+
+        # Build a dataframe that matches your existing schema
+        # Map internal columns to DB columns (most are same already)
+        candidate_map = {
+            "neo_reference_id": "neo_reference_id",
+            "date": "date",
+            "name": "name",
+            "orbiting_body": "orbiting_body",
+            "absolute_magnitude_h": "absolute_magnitude_h",
+            "diameter_m": "diameter_m",
+            "miss_distance_km": "miss_distance_km",
+            "velocity_kmh": "velocity_kmh",
+            "hazardous": "hazardous",
+            "anomaly_score": "anomaly_score",
+            "anomaly_label": "anomaly_label",
+            "iso_anomaly": "iso_anomaly",
+            "risk_score": "risk_score",
+            "risk_label": "risk_label",
+        }
+
+        if pred_time_col:
+            candidate_map["prediction_time_utc"] = pred_time_col
+
+        # Keep only columns that exist in DB and exist in df
+        db_write_cols = []
+        for df_col, db_col in candidate_map.items():
+            if db_col in table_cols and df_col in df.columns:
+                db_write_cols.append((df_col, db_col))
+
+        if not db_write_cols:
+            raise RuntimeError("No writable columns matched between dataframe and neo_predictions table.")
+
+        df_write = pd.DataFrame()
+        for df_col, db_col in db_write_cols:
+            df_write[db_col] = df[df_col]
+
+        # Important: do NOT try to write pred_id (PK) unless you manage it
+        # Optional: if source_id exists in DB, set it to 1 (or 0) if you want
+        if "source_id" in table_cols and "source_id" not in df_write.columns:
+            df_write["source_id"] = 1
+
+        # Ensure key columns exist
+        if "neo_reference_id" not in df_write.columns or "date" not in df_write.columns:
+            raise RuntimeError("neo_reference_id and date are required for UPSERT key.")
+
+        # Convert types
+        df_write["neo_reference_id"] = df_write["neo_reference_id"].astype(str)
+        df_write["date"] = df_write["date"].astype(str)
+
+        # Build UPSERT SQL
+        cols = df_write.columns.tolist()
+        placeholders = ",".join(["?"] * len(cols))
+        col_list = ",".join(cols)
+
+        update_cols = [c for c in cols if c not in ("neo_reference_id", "date")]
+        update_set = ",".join([f"{c}=excluded.{c}" for c in update_cols])
+
+        sql = f"""
+            INSERT INTO {PRED_TABLE} ({col_list})
+            VALUES ({placeholders})
+            ON CONFLICT(neo_reference_id, date) DO UPDATE SET
+            {update_set}
+        """
+
+        conn.executemany(sql, df_write.itertuples(index=False, name=None))
         conn.commit()
-        
-        # Get final count
-        cursor = conn.execute(f"SELECT COUNT(*) FROM {PRED_TABLE}")
-        final_count = cursor.fetchone()[0]
-    
-    print(f"✅ Saved {final_count:,} records to database")
+
+        final_count = conn.execute(f"SELECT COUNT(*) FROM {PRED_TABLE}").fetchone()[0]
+
+    print(f"✅ Upserted {len(df_write):,} rows. {PRED_TABLE} now has {final_count:,} records.")
 
 
-def main():
-    """
-    Main migration process
-    """
-    print("="*60)
+def main() -> int:
+    print("=" * 60)
     print("NEO Historical Data Migration")
-    print("="*60 + "\n")
-    
-    # Get source file
+    print("=" * 60)
+
     if len(sys.argv) > 1:
-        source_path = sys.argv[1]
+        source_path = _clean_path(sys.argv[1])
     else:
-        source_path = input("Enter path to historical data file (DB/CSV): ").strip()
-    
+        source_path = _clean_path(input("Enter path to historical data file (DB/CSV): "))
+
     if not os.path.exists(source_path):
         print(f"❌ File not found: {source_path}")
         return 1
-    
-    # Load data
+
     df = load_historical_data(source_path)
-    if df is None:
+    if df is None or df.empty:
+        print("❌ No data loaded.")
         return 1
-    
-    # Standardize columns
+
     df = standardize_columns(df)
-    
-    # Preview data
+
     print("\nData preview:")
     print(df.head())
     print(f"\nColumns: {df.columns.tolist()}")
-    
-    confirm = input("\nDoes this look correct? (y/n): ").lower()
-    if confirm != 'y':
-        print("Migration cancelled. Adjust column mappings in standardize_columns() function.")
+
+    confirm = input("\nDoes this look correct? (y/n): ").strip().lower()
+    if confirm != "y":
+        print("Cancelled.")
         return 1
-    
-    # Add predictions
+
     df = add_predictions(df)
-    
-    # Save to database
     save_to_database(df)
-    
-    print("\n" + "="*60)
-    print("✅ Migration complete!")
-    print("="*60)
-    print("\nYou can now:")
-    print("1. Run realtime_neo_updater.py to fetch new data")
-    print("2. Run streamlit run enhanced_dashboard.py to view the dashboard")
-    
+
+    print("\n✅ Migration complete!")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())
