@@ -14,11 +14,11 @@ import os
 # Configuration
 OLD_DB_PATH = "neo.db"  # Your existing database (change if different)
 NEW_DB_PATH = "neo.db"  # New database with predictions
-PRED_TABLE = "neo_predictions"
+PRED_TABLE = "near_earth_objects"
 
 # Model paths
-XGBOOST_MODEL_PATH = "xgboost_model.pkl"
-ISOLATION_FOREST_MODEL_PATH = "isolation_forest_model.pkl"
+XGBOOST_MODEL_PATH = "neo_hazard_model_xgb_iso.joblin"
+ISOLATION_FOREST_MODEL_PATH = "neo_isolation_forest_model.joblib"
 SCALER_PATH = "scaler.pkl"
 
 
