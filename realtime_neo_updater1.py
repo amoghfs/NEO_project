@@ -191,8 +191,40 @@ class NEOPredictor:
                         f"Error parsing NEO {neo.get('name', 'Unknown')}: {exc}"
                     )
                     continue
+<<<<<<< HEAD
 
         df = pd.DataFrame.from_records(records)
+=======
+        
+        return pd.DataFrame(records)
+    
+    def predict(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Generate predictions"""
+        if df.empty:
+            return df
+        
+        # Simple risk calculation if models not available
+        if self.xgboost_model is None and self.isolation_forest is None:
+            # Fallback: rule-based risk
+            df["risk_score"] = (
+                (df["diameter_m"] > 140) * 0.4 +
+                (df["velocity_kms"] > 15) * 0.3 +
+                (df["miss_distance_km"] < 7480000) * 0.3
+            )
+            df["risk_label"] = pd.cut(
+                df["risk_score"],
+                bins=[0, 0.3, 0.7, 1.0],
+                labels=["LOW", "MEDIUM", "HIGH"]
+            )
+        else:
+            # Use actual models (simplified - adjust based on your model requirements)
+            df["risk_score"] = df["hazardous"].astype(float)  # Placeholder
+            df["risk_label"] = df["hazardous"].map({0: "LOW", 1: "HIGH"})
+        
+        # Fixed datetime - use timezone-aware
+        df["prediction_time_utc"] = datetime.now(timezone.utc).isoformat()
+        
+>>>>>>> 5c48477a91eba559d2dc67984d32992a3bc998da
         return df
 
     def predict(self, df: pd.DataFrame) -> pd.DataFrame:
