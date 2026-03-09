@@ -3,8 +3,8 @@ End-to-end NEO pipeline for Railway worker:
 1) Fetch latest NEO data from NASA NeoWs
 2) Upsert into SQLite raw table
 3) Train/retrain XGBoost + Isolation Forest
-4) Generate predictions for dashboard
-5) Repeat every 2 hours (12 runs/day)
+4) Generate predictions for the Streamlit dashboard
+5) Repeat every hour by default
 """
 
 import argparse
@@ -486,21 +486,21 @@ def upsert_predictions(df: pd.DataFrame) -> int:
         """
         update_payload = [
             (
-                p[1],   # name
-                p[3],   # orbiting_body
-                p[4],   # diameter_m
-                p[5],   # miss_distance_km
-                p[6],   # velocity_kmh
-                p[7],   # hazardous
-                p[8],   # absolute_magnitude_h
-                p[9],   # xgb_risk_prob
-                p[10],  # isolation_anomaly_score
-                p[11],  # is_anomaly
-                p[12],  # risk_score
-                p[13],  # risk_label
-                p[14],  # prediction_time_utc
-                p[2],   # neo_reference_id
-                p[0],   # date
+                p[1],
+                p[3],
+                p[4],
+                p[5],
+                p[6],
+                p[7],
+                p[8],
+                p[9],
+                p[10],
+                p[11],
+                p[12],
+                p[13],
+                p[14],
+                p[2],
+                p[0],
             )
             for p in payload
         ]
@@ -555,7 +555,8 @@ def run_pipeline_once() -> RunStats:
 
         today_utc = datetime.now(timezone.utc).date()
         start_date = (today_utc - timedelta(days=1)).isoformat()
-        end_date = (today_utc + timedelta(days=6)).isoformat()
+        # NASA's feed endpoint allows a maximum 7-day inclusive window.
+        end_date = (today_utc + timedelta(days=5)).isoformat()
 
         rows = fetch_neos(start_date, end_date)
         stats.fetched_rows = len(rows)
@@ -599,8 +600,8 @@ def main() -> None:
     parser.add_argument(
         "--interval-seconds",
         type=int,
-        default=int(os.getenv("PIPELINE_INTERVAL_SECONDS", "7200")),
-        help="Loop interval in seconds (default: 7200 = 2 hours)",
+        default=int(os.getenv("PIPELINE_INTERVAL_SECONDS", "3600")),
+        help="Loop interval in seconds (default: 3600 = 1 hour)",
     )
     args = parser.parse_args()
 

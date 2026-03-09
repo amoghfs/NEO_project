@@ -253,7 +253,7 @@ with viz_col1:
         yaxis_title="Count",
         showlegend=True
     )
-    st.plotly_chart(fig_hist, use_container_width=True)
+    st.plotly_chart(fig_hist, width="stretch")
 
 with viz_col2:
     st.subheader("Model Comparison: XGBoost vs Isolation Forest")
@@ -274,7 +274,7 @@ with viz_col2:
             xaxis_title="XGBoost Risk Probability",
             yaxis_title="Isolation Forest Anomaly Score"
         )
-        st.plotly_chart(fig_scatter_models, use_container_width=True)
+        st.plotly_chart(fig_scatter_models, width="stretch")
     else:
         st.info("Model comparison requires both XGBoost and Isolation Forest scores")
 
@@ -316,7 +316,7 @@ if df_filtered["date_parsed"].notna().any():
         showlegend=True
     )
     
-    st.plotly_chart(fig_timeline, use_container_width=True)
+    st.plotly_chart(fig_timeline, width="stretch")
 
 # Row 3: Physical characteristics vs risk
 st.subheader("🌌 Physical Characteristics Analysis")
@@ -344,7 +344,7 @@ with char_col1:
             xaxis_type="log",
             yaxis_type="log"
         )
-        st.plotly_chart(fig_scatter, use_container_width=True)
+        st.plotly_chart(fig_scatter, width="stretch")
 
 with char_col2:
     if "velocity_kmh" in df_filtered.columns:
@@ -358,7 +358,7 @@ with char_col2:
             box=True,
             labels={"velocity_kmh": "Velocity (km/h)", "risk_label": "Risk Level"}
         )
-        st.plotly_chart(fig_violin, use_container_width=True)
+        st.plotly_chart(fig_violin, width="stretch")
 
 # High Risk Objects Table
 st.header("⚠️ Highest Risk Objects")
@@ -387,7 +387,7 @@ def color_risk_label(val):
     return ''
 
 if "risk_label" in top_risks.columns:
-    styled_df = top_risks[display_cols].style.applymap(
+    styled_df = top_risks[display_cols].style.map(
         color_risk_label, 
         subset=["risk_label"]
     ).format({
@@ -398,9 +398,9 @@ if "risk_label" in top_risks.columns:
         "miss_distance_km": "{:,.0f}",
         "velocity_kmh": "{:,.0f}"
     })
-    st.dataframe(styled_df, use_container_width=True, height=400)
+    st.dataframe(styled_df, width="stretch", height=400)
 else:
-    st.dataframe(top_risks[display_cols], use_container_width=True, height=400)
+    st.dataframe(top_risks[display_cols], width="stretch", height=400)
 
 # Model Information
 with st.expander("ℹ️ About the Models"):
